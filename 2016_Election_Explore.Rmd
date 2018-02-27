@@ -1,0 +1,373 @@
+---
+title: "Predicting the 2016 Election Results"
+author: "Namrata Kolla"
+output: pdf_document
+---
+
+## 1. Mapping US Election Data
+
+### Load appropriate libraries 
+```{r message=FALSE}
+library(tidyverse)
+library(stringr)
+```
+
+### Download and clean Presidential Results data
+```{r message=FALSE}
+vote_dat <- read.csv("US_County_Level_Presidential_Results_08-16.csv.bz2")
+
+str(vote_dat)
+head(vote_dat)
+dim(vote_dat %>% filter(fips_code < 1000))
+# no places using 3 digit FIPS 
+dim(vote_dat %>% filter(fips_code < 10000))
+# 287 places use 4 digit FIPS 
+dim(vote_dat %>% filter(fips_code > 9999))
+# 2825 places use 5 digit FIPS 
+drop.cols <- c('total_2008', 'dem_2008', 'gop_2008', 'oth_2008')
+vote_dat <- vote_dat %>% select(-one_of(drop.cols))
+colnames(vote_dat)[1] <- "FIPS"
+vote_dat$FIPS <- as.character(vote_dat$FIPS)
+```
+Notes: 
+
+* FIPS is a Federal Information Processing Standard, which uniquely identifies counties and county equivalents in the United States 
+* vote_dat provides fips code, name of county, total no. of people who voted in that county in 2008 election, how many of those votes were for the democrat, how many for the republican, how many for other, and same 4 columns repeated for 2012 and 2016 elections
+* Would be interesting to see how votes in 2016 compared to previous presidential elections, so I'm keeping 2012 data. 
+* 2010 data is not available in the county_data file, so those columns were deleted using this source: https://stackoverflow.com/questions/35839408/r-dplyr-drop-multiple-columns
+* 3112 county/county-equivalents in total 
+
+### Download and clean County data
+```{r message=FALSE}
+cnty_dat <- read.csv("county_data.csv.bz2")
+str(cnty_dat)
+#head(cnty_dat)
+
+  # Delete unnecessary columns 
+drop.cols <- c('SUMLEV','DIVISION','CENSUS2010POP','ESTIMATESBASE2010','POPESTIMATE2010','POPESTIMATE2011','POPESTIMATE2013','POPESTIMATE2014','POPESTIMATE2015','NPOPCHG_2010','NPOPCHG_2011','NPOPCHG_2013','NPOPCHG_2014','NPOPCHG_2015','BIRTHS2010','BIRTHS2011','BIRTHS2013','BIRTHS2014','BIRTHS2015','DEATHS2010','DEATHS2011','DEATHS2013','DEATHS2014','DEATHS2015','NATURALINC2010','NATURALINC2011','NATURALINC2013','NATURALINC2014','NATURALINC2015','INTERNATIONALMIG2010','INTERNATIONALMIG2011','INTERNATIONALMIG2013','INTERNATIONALMIG2014','INTERNATIONALMIG2015','DOMESTICMIG2010','DOMESTICMIG2011','DOMESTICMIG2013','DOMESTICMIG2014','DOMESTICMIG2015','NETMIG2010','NETMIG2011','NETMIG2013','NETMIG2014','NETMIG2015','RESIDUAL2010','RESIDUAL2011','RESIDUAL2013','RESIDUAL2014','RESIDUAL2015','GQESTIMATESBASE2010','GQESTIMATES2010','GQESTIMATES2011','GQESTIMATES2013','GQESTIMATES2014','GQESTIMATES2015','RBIRTH2011','RBIRTH2013','RBIRTH2014','RBIRTH2015','RDEATH2011','RDEATH2013','RDEATH2014','RDEATH2015','RNATURALINC2011','RNATURALINC2013','RNATURALINC2014','RNATURALINC2015','RINTERNATIONALMIG2011','RINTERNATIONALMIG2013','RINTERNATIONALMIG2014','RINTERNATIONALMIG2015','RDOMESTICMIG2011','RDOMESTICMIG2013','RDOMESTICMIG2014','RDOMESTICMIG2015','RNETMIG2011','RNETMIG2013','RNETMIG2014','RNETMIG2015')
+cnty_dat <- cnty_dat %>% select(-one_of(drop.cols))
+
+  # Create concatenated FIPS code for merging with other file 
+cnty_dat$COUNTY <- str_pad(cnty_dat$COUNTY, 3, pad = "0")
+cnty_dat <- cnty_dat %>% mutate(FIPS=paste(STATE,COUNTY))
+cnty_dat$FIPS <- gsub('\\s+','',cnty_dat$FIPS)
+```
+
+Notes: 
+
+* Data about any year besides 2012 and 2016 were deleted 
+* Went from 116 columns to 37 columns
+* Padded county variable with leading 0s so it would match up with Presidential Results file's FIPS code when merged. Used this source about padding: https://stackoverflow.com/questions/5812493/adding-leading-zeros-using-r
+* Removed whitespace from strings using this source: https://stackoverflow.com/questions/20760547/removing-whitespace-from-a-whole-data-frame-in-r 
+* 3193 county/county-equivalents in total 
+
+### Join data sets by FIPS code and more cleaning
+```{r message=FALSE}
+elections_df <- inner_join(vote_dat, cnty_dat, by = "FIPS")
+
+  # delete uninteresting variables: 
+elections_df <- elections_df %>% 
+  select(-one_of('CTYNAME','RINTERNATIONALMIG2012','RINTERNATIONALMIG2016','RDOMESTICMIG2012','RDOMESTICMIG2016','RNATURALINC2012','RNATURALINC2016','GQESTIMATES2012','GQESTIMATES2016','RESIDUAL2012','RESIDUAL2016','NATURALINC2012','NATURALINC2016','INTERNATIONALMIG2012','INTERNATIONALMIG2016','DOMESTICMIG2012','DOMESTICMIG2016','BIRTHS2012','BIRTHS2016','DEATHS2012','DEATHS2016'))
+```
+* 3111 counties/county-equivalents in total (82 counties lost)
+
+### Compute additional interesting variables
+```{r message=FALSE}
+  # create variable that measures % democrats in 2016: 
+elections_df <- elections_df %>% mutate(pct_dem_2016=dem_2016/total_2016)
+elections_df <- elections_df %>% mutate(pct_gop_2016=gop_2016/total_2016)
+elections_df <- elections_df %>% mutate(pct_oth_2016=oth_2016/total_2016)
+  # create variable that measures change in % democrats: 
+elections_df <- elections_df %>% 
+  mutate(dem_pct_change=(dem_2016/total_2016)-(dem_2012/total_2012))
+  # create categorical variable that measures whether net migration in 2016 was positive (TRUE) or negative (FALSE)
+elections_df <- elections_df %>% mutate(rate_mig_pos_neg=(RNETMIG2016>=0))
+
+  # summary of NATIONAL results in 2016: 
+elections_df_summary <- elections_df %>% summarise(votes_dem = sum(dem_2016),
+                           votes_gop = sum(gop_2016),
+                           votes_tot = sum(total_2016),
+                           pop_vote_dem = votes_dem/votes_tot,
+                           pop_vote_gop = votes_gop/votes_tot)
+```
+
+Notes: 
+* dem_pct_2016 = gives the % of voters who voted for the democratic candidate in that county in 2016
+* dem_pct_change = gives the change in % of voters who voted for the democratic candidate in that county between 2016 and 2012 
+* rate_mig_pos_neg = categorical variables that tells whether the rate of net migration was positive (TRUE) or negative (FALSE). If exactly 0, it was labeled positive.
+* elections_df_summary is a fun table that shows what % of the national population voted for democrats and republicans
+
+### Describing the data and the more interesting variables
+```{r message=FALSE}
+str(elections_df)
+summary(elections_df)
+elections_df_summary
+```
+
+Notes: 
+
+* This data includes voting records in the 2016 and 2012 elections for 3111 different counties
+* Variables that start with total_, dem_, gop_, and oth_ are the raw # of people who voted for that particular party. These variables have really wide ranges because the population varies dramatically from one county to another 
+* A better measure is the variables that start with pct_. These tell the percent of the population that voted for that particular party. As expected, these range from 0 to 1.0
+* The mean % votes for dems in 2016 was 0.32 while the mean % votes for gop was 0.63. While this does not take differences in population size between counties into account, it fits the overall finding that GOP won in 2016. 
+* elections_df_summary shows that the popular vote nationallly was for democrats. It was a very close margin: 47.8% for democrats and 47.3% for the GOP Thus it is surprising that the GOP won, but this happens occassionally due to features like the electoral college, which I won't get into.
+* The mean dem_pct_change is negative (-0.068) which supports that the final results: the percent of the county that voted for democrats decreased from 2012 to 2016
+* rate_mig_pos_neg has more false than trues, which suggests more counties had people leaving the county than entering it. This corresponds with RNETMIG2016 having a mean of -0.5072.
+
+Variables to analyze: 
+
+* Population size 
+* dem_pct_change
+* rate_mig_pos_neg (categorical) or RNETMIG2016 
+
+Interesting hypothesis to consider: 
+More people are moving into cities  -> a small percent of counties (with the cities) are growing in population size while a much larger percent of counties are becoming more rural -> the smaller the population size the more likely to vote GOP -> more votes for GOP because a larger geographical area ends up voting for GOP (though population doesn't match up)
+
+### Plot % votes for Democrats vs County Population 
+```{r message=FALSE}
+ggplot(elections_df) +
+  geom_point(aes(x=POPESTIMATE2016,y=pct_dem_2016),alpha=0.2) + 
+  scale_x_log10() + 
+  ylab('Percent of votes in county for the Democratic candidate') + 
+  xlab('Population in county') + 
+  ggtitle('Voting percentage for Democrats vs Population size (by county) in 2016')
+  
+```
+
+Notes: 
+
+* Generally as the population size of a county increases, the percent of votes for the Democratic candidate also increases
+* Those with populations >= 1,000,000 almost always vote >50% democrat
+* Those with populations < 100,000 are more likely to vote gop 
+* There's a big cluster of data from population 10,000 to 100,000 probably because most counties have populations this size
+
+### Create map of % votes for democrats 
+```{r message=FALSE}
+elections_df_plot <- elections_df 
+
+# convert state and county names to lowercase 
+elections_df_plot$STNAME <- tolower(elections_df_plot$STNAME)
+elections_df_plot$county <- tolower(elections_df_plot$county)
+
+# remove last word from county variable
+elections_df_plot$county <- gsub("\\s*\\w*$", "", elections_df_plot$county)
+
+# download the coordinates for various counties 
+counties <- map_data(map="county",exact=FALSE)
+
+# change variable names to match with elections_df_plot
+colnames(counties)[5] <- "STNAME"
+colnames(counties)[6] <- "county"
+
+# apply election results to the county map
+elections_mapped <- left_join(counties,elections_df_plot, by = c("county","STNAME"))
+
+ggplot(elections_mapped,aes(long,lat)) + 
+  geom_polygon(aes(group=group,fill=pct_dem_2016)) + 
+  scale_fill_gradient(low = "#e86161", high = "#677fef")
+
+ggplot(elections_mapped,aes(long,lat)) + 
+  geom_polygon(aes(group=group)) + 
+  geom_point(aes(long,lat,color=pct_dem_2016,size=POPESTIMATE2016)) + 
+  scale_colour_gradient(low = "#e86161", high = "#677fef") + 
+  scale_size_continuous(range = c(0.1, 1)) + 
+  ggtitle('% of votes in county for 2016 Democrat (pct_dem_2016) and county population (popestimate2016)') +
+  theme(plot.title = element_text(size = 10,face="bold"))
+```
+
+Notes: 
+
+* Used this source for code on how to remove last word from county variable: https://stackoverflow.com/questions/13093931/r-remove-last-word-from-string
+* Used this source on how to decrease font size of ggtitle: https://stackoverflow.com/questions/35458230/how-to-increase-the-font-size-of-ggtitle-in-ggplot2 
+
+What I did, what worked, and what didn't work: 
+
+* At first, I only visualized the percentage of votes for the democratic party in each county on the map of counties in the US using a fill gradient. This worked really well because it was easy to see the county borders and to pick out larger areas where there were signficantly more votes for democrats (like major cities)
+* Then, I visualized the percentage of votes for the democratic party in each county using a fill gradient on dots, and then made the size of the dots the population size. This worked well for the areas where there were not too many counties; the sparse counties generally voted more Republican. However in areas where the counties were close together, this visualization did not work well. It became hard to see the county borders, and dots overlapping each other made some of those spots where democrats took a large majority of the vote (like major cities) very difficult to see. 
+
+### Another visualization 
+```{r message=FALSE}
+ggplot(elections_mapped) +
+  geom_histogram(aes(x=dem_pct_change,fill=rate_mig_pos_neg),binwidth=0.005) + 
+  xlab('Percent change in votes for Democrat in 2016 compared to 2012') + 
+  ylab('Number of counties') + 
+  ggtitle('rate_mig_pos_neg = whether county had net positive (TRUE) or negative (FALSE) change in migration rate') + 
+  theme(plot.title = element_text(size = 9,face="bold"))
+```
+
+Notes:
+
+* I created a histogram that looks at how percentage change in votes for Democrats from 2012 to 2016, faceted by whether the rate of migration increased or decreased from 2012 to 2016.
+* I found that most of the data was lower than 0.0, which says that regardless of the migration rates fewer percentages of people in most counties were voting for Democrats in 2016 than 2012. 
+* At the same time, those counties who saw a positive change in rate of migration (more people migrating into the county) had data in blue that was slightly further right than those counties who saw a negative change in rate of migration (fewer people migrating into the county) with data in red. This suggests that growing counties (e.g. counties containing cities) become more likely to vote Democratic. It also suggests that shrinking counties (i.e. counties becoming more rural) become more likely to vote not-Democratic. 
+
+----------
+
+## 2. 2016 Election Model
+
+### Add logical variable that democrats got more vote than GOP 
+```{r message=FALSE}
+  # variable describing whether more democrat or gop votes happened in the county
+elections_df <- elections_df %>% mutate(dems_more=dem_2016>gop_2016)
+elections_df$dems_more[elections_df$dems_more == FALSE] <- 0
+
+  # variable describing % of democrat votes in 2012
+elections_df <- elections_df %>% mutate(pct_dem_2012=dem_2012/total_2012)
+```
+
+The variable we're predicting is "dems_more" which is a logical of whether democrats got more votes (TRUE) or GOP got more votes (FALSE)
+
+The variables I consider relevant to that are: 
+* percent of votes for democratic candidate in 2012 election (pct_dem_2012) because the greater the percentage who voted in the 2012 election for Democrat, the more likely they were to stick with it for 2016
+* region of the country (REGION) because regions like the South have historically voted GOP while regions like the west have historically voted Democrat 
+* population size in 2016 (POPESTIMATE2016) because lower the population size probably leads to more votes for GOP 
+* population change in 2016 (NPOPCHG_2016) because more people leaving the county lowers population size and increases chances of vote going to GOP 
+* death rate (RDEATH2016)... I cannot explain connection, but I have noticed that poorer states or states where there are higher cancer rates from fossil fuel extraction (where death rate would be high) tend to vote GOP 
+
+### Attempt 1: includes seemingly relevant variables
+```{r message=FALSE}
+m <- glm(dems_more~pct_dem_2012+REGION+POPESTIMATE2016+NPOPCHG_2016+RDEATH2016, data=elections_df, family=binomial(link="logit"))
+summary(m)
+```
+
+```{r}
+#install.packages('pscl')
+library(pscl)
+
+# How did model do? 
+tp <- predict(m, type="response") > 0.5
+pR2(m)
+table(elections_df$dems_more,tp)
+table(elections_df$dems_more,tp) %>% diag() %>% sum()
+3012/(52+47+3012)
+```
+
+Notes: 
+
+* As expected, pct_dem_2012 was the biggest predictor of whether democrats won in that county in 2016. 
+* REGION was the next best predictor
+* Then, RDEATH2016, NPOPCHG_2016, and POPESTIMATE2016
+* Predicted outcome correctly 96.8% of the time
+* Logistic regression had a relatively strong fit; pseudo R-squared (McFaddens) has a value of .829
+
+### Attempt 2: Add on birth rate variable
+```{r}
+m2 <- glm(dems_more~pct_dem_2012+REGION+POPESTIMATE2016+NPOPCHG_2016+RDEATH2016+RBIRTH2016, data=elections_df, family=binomial(link="logit"))
+summary(m2)
+
+tp2 <- predict(m2, type="response") > 0.5
+pR2(m2)
+table(elections_df$dems_more,tp2)
+```
+
+Notes: 
+
+* pct_dem_2012 is still the biggest predictor of whether democrats won in that county in 2016
+* RBIRTH2016 is not a predictor variable... coefficient is small and it is not statistically significant
+* Prediction accuracy and R-squared values are still the same 
+
+### Attempt 3: Turn region into a factor variable
+```{r}
+# Attempt 3: Turn region into a factor variable
+m3 <- glm(dems_more~pct_dem_2012+as.factor(REGION)+POPESTIMATE2016+NPOPCHG_2016+RDEATH2016, data=elections_df, family=binomial(link="logit"))
+summary(m3)
+
+tp3 <- predict(m3, type="response") > 0.5
+pR2(m3)
+table(elections_df$dems_more,tp3)
+table(elections_df$dems_more,tp3) %>% diag() %>% sum()
+3026/(36+49+3026)
+```
+
+Notes: 
+
+* pct_dem_2012 is still the biggest predictor, but being in Region 3 or 4 is not far behind. REGIONS 3 and 4 correspond with the South and the West. Source: https://www2.census.gov/geo/docs/maps-data/maps/reg_div.txt
+* This makes a lot of sense because the South votes broadly GOP while the West votes broadly Democrat. Comparatively, the Northeast (REGION 1) and the Midwest (REGION 2) have more swing states. 
+* Then, RDEATH2016, NPOPCHG_2016, and POPESTIMATE2016
+* Predicted outcome correctly 97.3% of the time
+* Logistic regression had a relatively strong fit; pseudo R-squared (McFaddens) has a value of .846
+
+### Attempt 4: Add state variable, as a factor (BEST REGRESSION I GOT!)
+```{r}
+m4 <- glm(dems_more~pct_dem_2012+as.factor(REGION)+POPESTIMATE2016+NPOPCHG_2016+RDEATH2016+as.factor(STATE), data=elections_df, family=binomial(link="logit"))
+summary(m4)
+
+tp4 <- predict(m4, type="response") > 0.5
+pR2(m4)
+table(elections_df$dems_more,tp4)
+table(elections_df$dems_more,tp4) %>% diag() %>% sum()
+3042/(32+37+3042)
+```
+
+Notes: 
+
+* STATES 31, 29, 17, and 12 are statistically significant predictors. They represent Nebraska, Missouri, Illinois, and Florida respectively. Florida is surprising because it is a swing state. But perhaps these states all have an exceptionally large number of counties with very polarized beliefs.  
+* Predicted outcome correctly 97.8% of the time
+* Logistic regression had a relatively strong fit; pseudo R-squared (McFaddens) has a value of .874
+
+### Explain statistical significance (#2.4)
+
+Statistical significance is the likelihood that the difference between a given variation and your model is not due to random chance. The null hypothesis for any model is that there is no relationship between the (dependent) variable you are predicting and the (independent) variables you are using to predict it. When something is statistically significant, it means the null hypothesis was rejected and the likelihood of there actually BEING a relationship is high. You can estimate how high that likelihood is using confidence level. For example, when an estimated coefficient is statistically significant at 5% confidence level, it means there is only a 5% chance that the coefficient is correctly your dependent variable due to random chance. In other words, there is a 95% chance the coefficient is predicting the dependent variable to the magnitude of that coefficient. 
+
+### Statistical significance in my model (#2.5, #2.6)
+
+* In my model, the coefficients that are significant at a 0.1% confidence level are pct_dem_2012, POPESTIMATE2016, and RDEATH2016
+* The coefficients that are significant at a 1% confidence level are STATE(17) and STATE(31)
+* The coefficients that are significant at the 5% confidence level are REGION(3), STATE(29), and STATE(12)
+* pct_dem_2012 has a coefficient of 66.72. This means that one additional percentage of votes for Democrat in 2012 increases the odds ratio of the Democrat getting the most votes in 2016 / the Democrat not getting the most votes in 2016 by 66.72. It makes sense that this variable has the greatest effect because a similar percentage of the county that voted for the democratic candidate in 2012 is likely to vote for the democratic candidate again in 2016.  
+* POPESTIMATE2016 has a coefficient of 4.226e-06. This means that as population increases by 1, the odds ratio of the Democrat getting the most votes in 2016 / the Democrat not getting the most votes in 2016 increased by 4.226e-06. 
+* RDEATH2016 has a coefficient of -7.188e-01. This means that as the death rate increases by 1, the odds ratio of the Democrat getting the most votes in 2016 / the Democrat not getting the most votes in 2016 decreases by 0.7188. 
+
+
+----------
+
+## 3. Simulate effect of additional random coefficients 
+
+### Choose logistic model from above to add random coefficients
+```{r message=FALSE}
+m3 <- glm(dems_more~pct_dem_2012+as.factor(REGION)+POPESTIMATE2016+NPOPCHG_2016+RDEATH2016, data=elections_df, family=binomial(link="logit"))
+summary(m3)
+
+tp3 <- predict(m3, type="response") > 0.5
+pR2(m3)
+table(elections_df$dems_more,tp3)
+table(elections_df$dems_more,tp3) %>% diag() %>% sum()
+3026/(36+49+3026)
+```
+
+### Generate a bunch of coefficients from random vector
+```{r message=FALSE, warning=FALSE}
+  # 3111 observations in elections_df  
+coef_val <- c()
+  # takes ONE minute to run (couldn't figure out how to use sapply with this model)
+for (val in c(1:1001)){
+  set.seed(val)
+  rd_nos <- runif(3111,min=0,max=10000)
+  elections_df$rd_nos <- rd_nos
+  m_rep <- glm(dems_more~pct_dem_2012+as.factor(REGION)+POPESTIMATE2016+NPOPCHG_2016+RDEATH2016+rd_nos, data=elections_df, family=binomial(link="logit"))
+  coef_val[val] <- coef(m_rep)["rd_nos"]
+  elections_df$rd_nos <- NULL 
+}
+```
+
+### Sample mean and std dev (#3.2, #3.3)
+```{r message=FALSE}
+mean(coef_val)
+sd(coef_val)
+quantile(coef_val,c(0.025,0.975))
+```
+
+* The sample mean is 2.786558e-08
+* The standard deviation is 4.652352e-05
+* The 95% confidence interval is -8.730061e-05 to 9.290061e-05 
+
+### Plot distribution (#3.4, 3.5)
+```{r message=FALSE}
+hist(coef_val)
+mean(coef_val) - (1.96*sd(coef_val))
+mean(coef_val) + (1.96*sd(coef_val))
+```
+
+* The distribution looks approximately normal
+* The theoretical 95% confidence intervals would be mean - 1.96 standard deviations to mean + 1.96 standard deviations. This is -9.115822e-05 to 9.121396e-05
+* The actual 95% confidence interval described previously is not far from this, so the distribution is probably close to normal
